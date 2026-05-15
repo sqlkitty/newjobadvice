@@ -1,18 +1,22 @@
 # New Job Week by Week 
 ## Menu
 
-- [Week 1](#week-1)
-- [Week 2](#week-2)
+- [Week 1 - What Tools Do You Need?](#week-1---what-tools-do-you-need)
+- [Week 2 - Creating a Checklist](#week-2---creating-a-checklist)
   - [Checklist of Items to Analyze](#checklist-of-items-to-analyze)
   - [Highest and Lowest Priority Items](#highest-and-lowest-priority-items)
   - [Skills Required?](#skills-required)
-- [Week 3](#week-3)
+- [Week 3 - Creating Alerts](#week-3---creating-alerts)
   - [Get Started](#get-started)
   - [Terraform Components](#terraform-components)
   - [Creating Resources](#creating-resources)
   - [Creating Azure SQL Database](#creating-azure-sql-database)
+- [Week 4 - Setup Auditing](#week-4---setup-auditing)
+  - [Configure Auditing](#configure-auditing)
+  - [Querying Audit Data](#querying-audit-data)
+  - [Reporting on Audit Data](#reporting-on-audit-data)
 
-## Week 1
+## Week 1 - What Tools Do You Need?
 
 I changed to a new job and started it this week (March 2023). Before I started, I thought of all the things I thought I would want to do when I arrived. I don’t have a fancy, exact list of things I would do, so it’s time to make one. The thing is this is **the first time I’m working in an environment that’s entirely in the cloud**. There are no VMs so no traditional SQL Server setups. I have a long list of ideas I would do with SQL Server when I start working at a new job, but I don’t have a list for Azure. We had Azure SQL and Azure PostgreSQL at my last job. We also had Oracle, SQL Server, PostgreSQL, and their cloud varieties. There was so much other DB tech there that the Azure DBs didn’t get the love they need.
 
@@ -32,7 +36,7 @@ As I got to thinking about what I would do, I realized I needed a list of tools 
 -   **Greenshot** – This is an excellent screenshot tool and much nicer than anything built-in. [Download Greenshot](https://getgreenshot.org/downloads/)
 -   **Brave** – My new favorite browser. Uses less memory and has more tracker blocking. [Download Brave](https://brave.com/)
 
-## Week 2 
+## Week 2 - Creating a Checklist
 
 Last week was the first week of the rest of my life. But really it was the first week of my new job and I installed a lot of tools. You can learn more about those [in this blog post](https://sqlkitty.com/new-job-week-1-what-tools-do-you-need/). I also started thinking about how I would analyze existing databases. My focus is on Azure SQL right now. This post doesn’t include details about Azure PostgreSQL. I will hit those highlights in future blog posts. This post will outline the checklist I came up with in week two of my new job.
 
@@ -105,7 +109,7 @@ I’m going to use a few different things:
 
 My needs may vary over time, but this is a great place to start..
 
-## Week 3
+## Week 3 - Creating Alerts 
 
 
 **UPDATED**: I needed to change out resources that will be deprecated, such as azurerm\_mssql\_database, azurerm\_mssql\_firewall\_rule, and azurerm\_mssql\_server. Code snippets in this post and GitHub are updated accordingly.
@@ -331,3 +335,135 @@ resource "azurerm_monitor_metric_alert" "alertdtu80" {
 Once I’m done creating all these Terraform resources in files, I run terraform apply in the terminal. Then, once I’m happy with the tf files and they’ve all applied correctly, I will use either VS Code or GitHub Desktop to commit and push them to GitHub.
 
 Now I will receive an email if this threshold is crossed. Hopefully, no more someone telling me there’s a problem before I know there is a problem. I may add more alerts, but for now, these basic ones will cover many of the issues that may come up in Azure SQL Database.
+
+## Week 4 - Setup Auditing
+
+**The main goal for week 4: set up auditing for all Azure SQL Databases.** This week is again about learning more Terraform. I’m using Terraform because my company requires this for infrastructure management. I’m setting up a home lab because I don’t want to practice my entry-level Terraform skills on work resources.
+
+Can you set up an Azure SQL database and auditing without all this automation? Yes, you can. This post isn’t about that. I have a tutorial showing you how to manually set up auditing. Here’s the [shorter version](https://www.youtube.com/watch?v=qKvZkg_rPuM&t=1s) and the [longer version](https://www.youtube.com/watch?v=3u1sK9kgmuE&t=24s). This also isn’t a detailed tutorial on how you can use all these tools.
+
+Here are some helpful resources for learning more about Terraform:
+
+-   If you have LinkedIn Learning, this is a [very helpful course](https://www.linkedin.com/learning/introduction-to-terraform-on-azure/getting-started?autoplay=true) by Alexandra Illarionov.
+-   If you want to go the free route, you can get help directly from Terraform’s [tutorials](https://developer.hashicorp.com/terraform/tutorials/azure-get-started).
+
+**TL;DR** If you want the code without much explanation, visit my [GitHub code repository](https://github.com/sqlkitty/terraform).
+
+
+Now that you have your Azure SQL Server in place (if you followed week 3), you can add auditing to it. First, you will need a Log Analytics Workspace to store audit data in it. I chose Log Analytics, but you can also choose Storage or Event Hub. I love Log Analytics because it’s easy to query data with Kusto. Plus, you can centralize all your database audit data in one workspace per subscription.
+
+```
+resource "azurerm_log_analytics_workspace" "example" {
+  name                = "law-${azurerm_resource_group.rg.name}"
+  location            = var.resource_group_location
+  resource_group_name = random_pet.rg_name.id
+  sku                 = "PerGB2018"
+  retention_in_days   = 30
+}
+```
+
+Now you can set up auditing. This means it will audit all Azure SQL databases on the server in the same way. It will put that audit data in the Log Analytics Workspace.
+
+```
+resource "azurerm_monitor_diagnostic_setting" "example" {
+  name                       = "ds-${azurerm_resource_group.rg.name}"
+  target_resource_id         = "${azurerm_mssql_server.example.id}/databases/master"
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.example.id
+
+  enabled_log {
+    category = "SQLSecurityAuditEvents"
+    # enabled  = true
+
+    retention_policy {
+      enabled = false
+    }
+  }
+
+  metric {
+    category = "AllMetrics"
+
+    retention_policy {
+      enabled = false
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [log, metric]
+  }
+}
+
+resource "azurerm_mssql_database_extended_auditing_policy" "example" {
+  database_id            = "${azurerm_mssql_server.example.id}/databases/master"
+  log_monitoring_enabled = true
+}
+
+resource "azurerm_mssql_server_extended_auditing_policy" "example" {
+  server_id              = azurerm_mssql_server.example.id
+  log_monitoring_enabled = true
+}
+```
+
+  
+Once I’m done creating all these Terraform resources in files, I run terraform apply in the terminal. Then, once I’m happy with the tf files and they’ve all applied correctly, I will use either VS Code or GitHub Desktop to commit and push them to GitHub.
+
+### Configure Auditing
+
+There is something important to know about Azure SQL auditing. It collects everything happening in the database by default with these audit action groups:
+
+BATCH\_COMPLETED\_GROUP
+
+SUCCESSFUL\_DATABASE\_AUTHENTICATION\_GROUP
+
+FAILED\_DATABASE\_AUTHENTICATION\_GROUP
+
+For now, I’m leaving my audit action groups as default because I want to see all the queries hitting the databases. This way I can analyze them for performance tweaks that may be required. To make these changes, you will need PowerShell. I usually run this in the Azure CLI but am working out how to set this up in Terraform.
+
+You can get your current audit action groups by executing this code:
+
+```powershell
+Get-AzSqlServerAudit -ResourceGroupName 'rg-hopeful-monkey' -Servername 'sql-rg-hopeful-monkey'
+```
+
+You can set your audit action groups to only collect schema and security changes with this code:
+
+```powershell
+Set-AzSqlServerAudit -ResourceGroupName 'rg-hopeful-monkey' -ServerName ‘sql-rg-hopeful-monkey' ` -AuditActionGroup APPLICATION_ROLE_CHANGE_PASSWORD_GROUP, DATABASE_CHANGE_GROUP, ` DATABASE_OBJECT_CHANGE_GROUP, DATABASE_OBJECT_OWNERSHIP_CHANGE_GROUP, ` DATABASE_OBJECT_PERMISSION_CHANGE_GROUP, ` DATABASE_OWNERSHIP_CHANGE_GROUP, ` DATABASE_PERMISSION_CHANGE_GROUP, DATABASE_PRINCIPAL_CHANGE_GROUP, ` DATABASE_PRINCIPAL_IMPERSONATION_GROUP, ` DATABASE_ROLE_MEMBER_CHANGE_GROUP, ` SCHEMA_OBJECT_CHANGE_GROUP, SCHEMA_OBJECT_OWNERSHIP_CHANGE_GROUP, ` SCHEMA_OBJECT_PERMISSION_CHANGE_GROUP, USER_CHANGE_PASSWORD_GROUP
+```
+
+For now, I’m leaving my audit action groups as the default because I want to see all the queries hitting the databases so I can analyze them for performance tweaks that may be required. It will also help determine unused objects. I will update this post as I figure out how to use Terraform to set these audit action groups.
+
+### Querying Audit Data
+
+[Here’s](https://learn.microsoft.com/en-us/azure/data-explorer/kusto/query/tutorials/learn-common-operators) a helpful Kusto tutorial. Kusto is very powerful and easy to use. If you know SQL, you can use Kusto easily in Log Analytics. 
+
+
+```
+AzureDiagnostics
+| summarize QueryCountByDB = count() by database_name_s
+```
+
+Or maybe you want more details about what happened in the last day, and you can use this query:
+
+```
+AzureDiagnostics
+| where Category == 'SQLSecurityAuditEvents'
+   and TimeGenerated &gt; ago(1d) 
+| project
+    event_time_t,
+
+    action_name_s,
+    database_name_s,
+    statement_s,
+    server_principal_name_s,
+    succeeded_s,
+    client_ip_s,
+    application_name_s,
+    additional_information_s,
+    data_sensitivity_information_s
+| order by event_time_t desc
+```
+
+
+### Reporting on Audit Data
+
+In the past, I used a Logic App, but that’s harder to set up with Terraform. I’m planning to create an Azure Function to do this instead. [This presentation](https://github.com/sqlkitty/conferencepresenatations/blob/main/azuresqlaudit/HandleAzureSQLAuditingWithEase_passsummit.pdf) gives you the steps I used in my logic app starting on slide 30. I will add more info on the Terraform setup of an Azure Function in a future post.
