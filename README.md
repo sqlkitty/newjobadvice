@@ -1,4 +1,16 @@
 # New Job Week by Week 
+## Menu
+
+- [Week 1](#week-1)
+- [Week 2](#week-2)
+  - [Checklist of Items to Analyze](#checklist-of-items-to-analyze)
+  - [Highest and Lowest Priority Items](#highest-and-lowest-priority-items)
+  - [Skills Required?](#skills-required)
+- [Week 3](#week-3)
+  - [Get Started](#get-started)
+  - [Terraform Components](#terraform-components)
+  - [Creating Resources](#creating-resources)
+  - [Creating Azure SQL Database](#creating-azure-sql-database)
 
 ## Week 1
 
