@@ -1,5 +1,4 @@
 # New Job Week by Week 
-## Menu
 
 - [Week 1 - What Tools Do You Need?](#week-1---what-tools-do-you-need)
 - [Week 2 - Creating a Checklist](#week-2---creating-a-checklist)
@@ -15,6 +14,20 @@
   - [Configure Auditing](#configure-auditing)
   - [Querying Audit Data](#querying-audit-data)
   - [Reporting on Audit Data](#reporting-on-audit-data)
+- [Week 5 - Create Index Maintenance Scripts](#week-5---create-index-maintenance-scripts)
+  - [Install and Configure Flyway](#install-and-configure-flyway)
+  - [Flyway SQL File Setup](#flyway-sql-file-setup)
+  - [Run Index Maintenance on a Schedule](#run-index-maintenance-on-a-schedule)
+- [Week 6 - Ozar sp_BlitzIndex](#week-6---ozar-sp_blitzindex)
+  - [Important Bits](#important-bits)
+  - [sp_BlitzIndex Basics](#sp_blitzindex-basics)
+  - [sp_BlitzIndex Default Mode](#sp_blitzindex-default-mode)
+  - [Analyzing sp_BlitzIndex Results](#analyzing-sp_blitzindex-results)
+  - [sp_BlitzIndex Missing Indexes](#sp_blitzindex-missing-indexes)
+  - [sp_BlitzIndex Lower Priority Items](#sp_blitzindex-lower-priority-items)
+- [Week 7 and Beyond](#week-7-and-beyond)
+  - [Checklist for the Future](#checklist-for-the-future)
+
 
 ## Week 1 - What Tools Do You Need?
 
@@ -467,3 +480,269 @@ AzureDiagnostics
 ### Reporting on Audit Data
 
 In the past, I used a Logic App, but that’s harder to set up with Terraform. I’m planning to create an Azure Function to do this instead. [This presentation](https://github.com/sqlkitty/conferencepresenatations/blob/main/azuresqlaudit/HandleAzureSQLAuditingWithEase_passsummit.pdf) gives you the steps I used in my logic app starting on slide 30. I will add more info on the Terraform setup of an Azure Function in a future post.
+
+
+## Week 5 - Create Index Maintenance Scripts 
+
+**Week 5 goal: set up Ola index maintenance for all Azure SQL Databases.** This week is about learning Flyway. I’m using Flyway because my company requires this for DDL deployments. I’m setting up a home lab because I don’t want to practice my entry-level Flyway skills on work resources.
+
+Is it possible to set up an Azure SQL database and index maintenance without all this automation? Yes, you can. This post isn’t about that. This also isn’t a detailed tutorial on how to use all these tools.
+
+**TL;DR:** If you want the code without explanation, visit my [GitHub code repository](https://github.com/sqlkitty/flyway).
+
+
+### Install and Configure Flyway
+
+Now that you have your Azure SQL Server in place (if you followed the week 3 blog post), you can add some SQL objects to it. You could do this manually or with PowerShell. In my case, I chose Flyway because we use that to do all our database deployments.
+
+I chose the [community edition CLI](https://documentation.red-gate.com/fd/command-line-184127404.html) because I want to use Flyway in the VSCode terminal. Make sure to add Flyway to your PATH so you can run it from your repository in VSCode. Here’s the [official Flyway documentation](https://documentation.red-gate.com/fd/welcome-to-flyway-184127914.html). Here’s a [short video](https://www.youtube.com/watch?v=t-3z6XIAPyA) on using Flyway at the command line and here’s [another one](https://www.youtube.com/watch?v=qsacSRcHCCs). It’s quite straightforward with just seven commands: [Migrate](https://documentation.red-gate.com/fd/flyway-cli-and-api/commands/migrate), [Clean](https://documentation.red-gate.com/fd/flyway-cli-and-api/commands/clean), [Info](https://documentation.red-gate.com/fd/flyway-cli-and-api/commands/info), [Validate](https://documentation.red-gate.com/fd/flyway-cli-and-api/commands/validate), [Undo](https://documentation.red-gate.com/fd/flyway-cli-and-api/commands/undo), [Baseline](https://documentation.red-gate.com/fd/flyway-cli-and-api/commands/baseline), and [Repair](https://documentation.red-gate.com/fd/flyway-cli-and-api/commands/repair).
+
+You will need to make sure you have a flyway.conf file. This will configure Flyway to connect to your database along with some other settings. I put this in my repository which contains what I want to deploy to my database.
+
+```
+flyway.url=jdbc:sqlserver://servername.database.windows.net;database=db-rg-hopeful-monkey;encrypt=true;trustServerCertificate=false;hostNameInCertificate=*.database.windows.net;loginTimeout=30;
+    flyway.user=sqladmin
+    flyway.password=password@123!
+    flyway.locations=filesystem:./Migrations,filesystem:./Functions,filesystem:./Procedures,filesystem:./Views
+    flyway.createSchemas=true
+    flyway.encoding=ISO-8859-1
+    flyway.sqlMigrationPrefix=V
+    flyway.repeatableSqlMigrationPrefix=R
+    flyway.sqlMigrationSeparator=__
+    flyway.sqlMigrationSuffixes=.sql
+    flyway.validateMigrationNaming=true
+```
+
+Flyway will use that conf file to know where to deploy and what settings to use like:
+
+-   **flyway.locations** You will want to build a folder structure so that Flyway knows what to execute.
+    -   Migrations are in one folder (this is for tables)
+    -   Views
+    -   Procedures
+    -   Functions
+-   **sqlMigrationSeparator** In this case it’s \_\_ (two underscores). This will be used after the migration prefix and repeatable prefix
+-   **sqlMigrationPrefix** You will prefix the files in your Migration folder with V\_\_ (that’s V with two underscores after it). This will be for tables you want to migrate to your database.
+-   **repeatableSqlMigrationPrefix** You will put R \_\_ (that’s R with two underscores after it). This can be used on views, functions, and procedures. For more info about repeatables, visit this [link](https://documentation.red-gate.com/fd/migrations-184127470.html).
+
+## Flyway SQL File Setup
+
+Here’s an example of my folder structure and files:
+
+![](https://github.com/sqlkitty/newjobadvice/blob/main/images/flyway-file-structure.jpg)
+
+I have no functions or views right now. I have four repeatable stored procedures. Then I have my migrations folder, which contains a script to create a schema and a table. I want to store all my dba related tables and stored procs in their own schema to keep them separate from the app tables in Azure SQL.
+
+```sql
+/* V0001_create_schema.sql */ IF NOT EXISTS ( SELECT * FROM sys.schemas WHERE name = N'dba' ) EXEC ('CREATE SCHEMA [dba]'); GO
+```
+
+```sql
+/* V0002_CommandLog.sql */ IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dba].[CommandLog]') AND type in (N'U')) BEGIN CREATE TABLE [dba].[CommandLog]( [ID] [int] IDENTITY(1,1) NOT NULL, [DatabaseName] [sysname] NULL, [SchemaName] [sysname] NULL, [ObjectName] [sysname] NULL, [ObjectType] [char](2) NULL, [IndexName] [sysname] NULL, [IndexType] [tinyint] NULL, [StatisticsName] [sysname] NULL, [PartitionNumber] [int] NULL, [ExtendedInfo] [xml] NULL, [Command] [nvarchar](max) NOT NULL, [CommandType] [nvarchar](60) NOT NULL, [StartTime] [datetime2](7) NOT NULL, [EndTime] [datetime2](7) NULL, [ErrorNumber] [int] NULL, [ErrorMessage] [nvarchar](max) NULL, CONSTRAINT [PK_CommandLog] PRIMARY KEY CLUSTERED ( [ID] ASC )WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [PRIMARY] ) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY] END GO
+```
+
+NOTE: file encoding can be an issue. This means that if you download or create a SQL file, Flyway may error on it. This may happen even if it runs successfully in SSMS or Azure Data Studio. You can change the encoding in VSCode. To do so, view the file encoding which is shown near the bottom right. Click on it then it will open a prompt at the top to save with encoding. Choose UTF-8 and that should fix your encoding problem.
+
+I also downloaded the other bits I needed from [Ola’s website](https://ola.hallengren.com/downloads.html).
+
+-   You always need CommandExecute
+-   You will also need IndexOptimize
+-   CommandLog is optional, but I like having Ola script execution logged to a table
+
+I’m also adding some other stored procs that I will find useful in my environments:
+
+-   [sp\_whoisactive](https://github.com/amachanic/sp_whoisactive) – A comprehensive activity monitoring stored procedure. It works for all versions of SQL Server from 2005 through 2019 and Azure SQL DB.
+-   [usp\_FindBrokenReferences](https://www.sqlservercentral.com/articles/find-invalid-objects-in-sql-server) – This helps you find broken or invalid objects. An invalid object is a database object referencing another object renamed or deleted.
+
+Once you have the scripts in place, you deploy them at VS Code terminal by executing:
+
+```
+flyway migrate 
+```
+
+That’s going to push your SQL into the database you specified in the flyway.conf. We use Azure DevOps pipelines to deploy to Azure SQL databases, but I’m not sure how that works, yet. I’ll cover that in future blog posts.
+
+### Run Index Maintenance on a Schedule
+
+Azure SQL doesn’t have an agent, and I find elastic jobs complicated. I’m planning to use an Azure Function with PowerShell to call the Ola stored proc in my database. I’m not sure how to make the Azure Function work yet, so that will be covered in a future blog post. This is a work in progress, so for now, I’ll run the index maintenance manually. We don’t have a ton of data changes, so even if I did it once a week, that would cover it.
+
+To update statistics only:
+
+```
+EXECUTE [dba].[IndexOptimize]
+@Databases = 'USER_DATABASES' ,
+@FragmentationLow = NULL ,
+@FragmentationMedium = NULL ,
+@FragmentationHigh = NULL ,
+@UpdateStatistics = 'ALL' ,
+@LogToTable = 'Y';
+```
+
+To rebuild/reorganize indexes, as needed:
+
+```
+EXECUTE dba.IndexOptimize
+@Databases = 'USER_DATABASES',
+@FragmentationLow = NULL,
+@FragmentationMedium = 'INDEX_REORGANIZE',
+@FragmentationHigh = 'INDEX_REBUILD_ONLINE',
+@FragmentationLevel1 = 10,
+@FragmentationLevel2 = 35,
+@UpdateStatistics = 'ALL',
+@Indexes = 'ALL_INDEXES',
+@LogToTable = 'Y'; 
+```
+
+Once I automate it, my plan is to have statistics updated nightly with index maintenance only on weekends. For years, the idea was to not have your indexes fragmented. However, the real gains achieved by a rebuild are the statistics updates that happen along with that. See [this Microsoft guidance](https://learn.microsoft.com/en-us/sql/relational-databases/indexes/reorganize-and-rebuild-indexes?view=sql-server-ver16#a-positive-side-effect-of-index-rebuild) for more information along with [their index maintenance guidance](https://learn.microsoft.com/en-us/sql/relational-databases/indexes/reorganize-and-rebuild-indexes?view=sql-server-ver16#a-positive-side-effect-of-index-rebuild). There is also [specific guidance](https://learn.microsoft.com/en-us/sql/relational-databases/indexes/reorganize-and-rebuild-indexes?view=sql-server-ver16#a-positive-side-effect-of-index-rebuild) for performing index maintenance in Azure.
+
+
+
+## Week 6 - Ozar sp_BlitzIndex
+
+**Week 6 goal: Analyze all Azure SQL Database indexes.** Last week, I started pushing out the sp\_Blitz scripts that work on Azure.
+
+In the world of SQL Server and Azure SQL, it is essential to have a reliable way to identify performance bottlenecks in your database. Fortunately, Brent Ozar’s sp\_BlitzIndex stored procedure is a powerful tool that can help you quickly identify potential problems with your database’s indexes.
+
+The sp\_BlitzIndex stored procedure analyzes all indexes in your database and provides a detailed report on their usage and performance. This information can be invaluable when optimizing your database’s performance and improving its overall efficiency.
+
+In this blog post, we’ll look at how to use the sp\_BlitzIndex stored procedure.
+
+**TL;DR:** If you want the code without explanation, visit [my GitHub code repository](https://github.com/sqlkitty/flyway/tree/main/Procedures). I use Flyway to deploy these, so they are in the Flyway repository. They live in the Procedures folder and start with R\_\_.
+
+You can get the originals [here](https://github.com/BrentOzarULTD/SQL-Server-First-Responder-Kit), but if you want them in a DBA schema as I did, you can use my modified scripts. Not all the Blitz scripts work in Azure, so I’ve picked out the ones that do and will walk through how I’m using them.
+
+### Important Bits
+
+Important bits to remember:
+
+-   Don’t test in production
+-   Don’t make too many index changes at once. I like to make one change at a time and let it sit for a bit. See how it helps or doesn’t. Some really great advice from Erik Darling [here](https://erikdarlingdata.com/sql-server-community-tools-how-i-use-sp_blitzindex/) and my favorite part of the post is what process Erik follows:
+    -   Get rid of totally unused indexes
+    -   Come back and see what duplicate indexes are left
+    -   Merge those together
+    -   Come back and see what borderline duplicate indexes are left
+    -   Merge those together
+    -   Come back and see if there are any indexes with a really bad write-to-read ratio
+    -   Decide which of those is safe to drop
+    -   I would add to this adding indexes that are missing
+
+### sp\_BlitzIndex Basics
+
+Ozar has detailed documentation and even a video on [this page](https://www.brentozar.com/blitzindex/) on his website. In fact, a few years back, I took [this course](https://training.brentozar.com/p/how-i-use-the-first-responder-kit) offered by Ozar on how he uses the First Responder Kit, which includes sp\_Blitz stored proc varieties.
+
+To start with, here are the common parameters for sp\_BlitzIndex:
+
+-   @Mode = 0 (default) – basic diagnostics of urgent issues
+-   @Mode = 1 – summarize database metrics
+-   @Mode = 2 – index usage detail only
+-   @Mode = 3 – missing indexes only
+-   @Mode = 4 – in-depth diagnostics, including low-priority issues and small objects
+
+I generally start with the default mode like so:
+
+```
+EXEC dba.sp_BlitzIndex; 
+```
+
+This provides you with a list of the highest-priority items to research. With the default sp\_blitzindex, you get up to priority level 100.
+
+
+### sp\_BlitzIndex Default Mode
+
+That previous screenshot is an example of the type of results, but only the first column of those results. Not to worry you get way more info than that, but I can’t show you the exact details of some of it. And the first row is always -1. It gives you the version of sp\_BlitzIndex you are using, the server name, and how long it has been up. Here are the included columns:
+
+-   **Priority** **–** How critical it is to fix this
+-   **Finding** – List the issues this index is having
+-   **Database Name** – The database name
+-   **Details** – Gives you info on the reads/writes using this index along with its name
+-   **Definition** – Lists the index columns
+-   **Secret Columns** – SQL Server will ensure that all columns from the clustering key of the table are ALSO in the nonclustered index. More info here.
+-   **Usage** – Reads/writes on the index
+-   **Size** – Size of the index in the number of rows and storage size
+-   **More Info** – Script to get more details on the table this index is on
+-   **URL** – To give you more info about the finding
+-   **Create TSQL** – A script to recreate this index
+-   **Sample Query Plan** – This is always NULL in my results  
+    
+
+### Analyzing sp\_BlitzIndex Results
+
+Let’s see how I handle those for which I received results:
+
+-   **Index Hoader: Unused NC Index with High Writes** – I would review what indexes are on the table currently and see if another similar index is in use instead of this one. I would also track this index’s usage over time to ensure it is not in use for reads. If not, I would get rid of it.
+-   **Multiple Index Personalities: Borderline duplicate keys** –
+    -   In the case of the following two indexes, **I would most likely drop the first one.** The second index covers everything the first index would cover. If they had the exact same columns, I would keep the UNIQUE one. Also, nicely, the second one already has more reads on it, so SQL Server chooses that one over the first one.
+        -   First index – dbo.tablename.IX\_col1\_col2
+        -   Second index – dbo.tablename.UIX\_col1\_col2\_col3 and this second one is UNIQUE
+    -   In this case, **I would keep the ones with the INCLUDES for now with more research into them.** This is to see if they are both needed. I can safely drop the first index, though, because it can be covered by the second or third index anyway.
+        -   First index – dbo.othertable.IX\_col1. This has the highest read count, but SQL Server could use the other indexes if this one was unavailable.
+        -   Second index – dbo.othertable.IX\_col1\_includes – This includes 11 columns and I would research if that many included columns is really needed.
+        -   Third index – dbo.othertable.IX\_col1\_col2\_differentincludes – This includes 4 columns that are different from the other index with includes on this table.
+    -   In this case, **I would probably combine these into one index**, so I have an index with both columns and then includes with the filter.
+        -   First index – dbo.yetanothertable.IX\_col1\_includes where col1 is not null
+        -   Second index is filtered – dbo.yetanothertable.IX\_col1\_col2 where col1 is not null
+-   **Indexophobia: High Value Missing Index** – I would look at how many indexes are on the table now and if I could modify anything to support this index need. If there aren’t many indexes (like 5 or more) already and nothing else could be easily modified to support this index, I would consider adding it.
+-   **Self Loathing Indexes: Low Fill Factor on Clustered Index** – This one makes me feel queasy right away because I never change the fill factor on indexes. It’s usually not recommended. Most likely, this one is being reset to 100.
+-   **Self Loathing Indexes: Small Active Heap** – In my case, these are VERY small tables. I will most likely index these anyway because they are active.
+
+There’s even more than what shows up in my results. Ozar has a ton of different types of issues but they aren’t all in my databases. He provides links for each one of them to help you if your results are different than mine.
+
+### sp\_BlitzIndex Missing Indexes
+
+I also like the missing index mode of sp\_BlitzIndex, which you can use by executing the following code:
+
+```
+EXEC dba.sp_BlitzIndex @Mode = 3;
+```
+
+This mode may include indexes recommended in the default mode. The default mode picks up the ones with the highest value, but it’s still worth running in @Mode = 3 to get a complete list. I analyze this list against what indexes I already have. It may be possible to change an existing index to accommodate these recommendations. It’s also important to check how many indexes the table has already. After that research, if I need this index, I will add it.
+
+### sp\_BlitzIndex Lower Priority Items
+
+Once you get through all the 100 and lower results, you can work through the lower-priority indexing issues by executing:
+
+```
+EXEC dba.sp_BlitzIndex @Mode = 4;
+```
+
+This will return lower-priority indexing issues.
+
+This includes all the same columns as the default mode and includes links to help you solve them if needed.
+
+
+## Week 7 and Beyond
+
+As a DBA, the first six weeks on the job can be challenging and exciting. During this period, you are expected to learn about the company’s processes. You are also expected to understand the database systems in use and familiarize yourself with the tools and technologies required to perform your role effectively.
+
+I’ve taken this DBA approach from the perspective of being fully in the cloud, specifically on Azure SQL Database. I know many people aren’t at that point yet, but you still need to perform similar tasks on databases on a VM.
+
+### Checklist for the Future
+
+**What does this mean in terms of what I’m planning to do going forward?** Looking through my week 2 checklist, I can see that I focused on the high-priority items first. These items for me were monitoring/alerting, auditing, and index maintenance. It’s still a work in progress, but there is substantial progress. Here’s my week 2 checklist status:
+
+**DONE**
+
+-   **Alerting**/**Monitoring** – We are now receiving alerts for:
+    -   DTU %
+    -   Disk usage %
+
+**IN PROGRESS**
+
+-   **Indexing** – Analysis in progress
+-   **Index maintenance** – Stored procs added to dev/QA and executed manually for now. They will be added to UAT and prod soon. In addition, they will be scheduled to run across all environments in the near future.
+-   **Auditing** – Enabled in dev/QA/UAT and soon in prod.
+-   **Finding Invalid/Broken** **Items** – Stored proc setup in dev/QA
+
+**NEEDS ANALYSIS/PLANNING**
+
+-   **Baselining** 
+-   **Data retention and archiving** 
+-   **Data types** 
+-   **Perms review** 
+-   **Vulnerability assessments** 
+
+Additionally, I have some other significant items that came up in my first 6 weeks:
+
+-   **Separating reporting traffic from transactional traffic** – They both use transactional databases. This makes it challenging to properly tune indexes and get the most optimal performance for each type of traffic.
+-   **Company-specific projects** – I’m sure you will have things expected of you beyond the traditional DBA-type work to be done. I will balance those tasks with my DBA tasks. For example, I must set up masked columns and ensure the correct users can unmask them.
+
+
