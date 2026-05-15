@@ -4,11 +4,7 @@
 
 ![](https://sqlkitty.com/wp-content/uploads/2023/03/ross-findon-mG28olYFgHI-unsplash2.jpg)
 
-```
-This is part of a series of new job blog posts.  You can find them all <a href="https://sqlkitty.com/category/newjob/" target="_blank" rel="noreferrer noopener">here</a>. 
-```
-
-I changed to a new job and started it this week. Before I started, I thought of all the things I thought I would want to do when I arrived. I don’t have a fancy, exact list of things I would do, so it’s time to make one. The thing is this is **the first time I’m working in an environment that’s entirely in the cloud**. There are no VMs so no traditional SQL Server setups. I have a long list of ideas I would do with SQL Server when I start working at a new job, but I don’t have a list for Azure. We had Azure SQL and Azure PostgreSQL at my last job. We also had Oracle, SQL Server, PostgreSQL, and their cloud varieties. There was so much other DB tech there that the Azure DBs didn’t get the love they need.
+I changed to a new job and started it this week (March 2023). Before I started, I thought of all the things I thought I would want to do when I arrived. I don’t have a fancy, exact list of things I would do, so it’s time to make one. The thing is this is **the first time I’m working in an environment that’s entirely in the cloud**. There are no VMs so no traditional SQL Server setups. I have a long list of ideas I would do with SQL Server when I start working at a new job, but I don’t have a list for Azure. We had Azure SQL and Azure PostgreSQL at my last job. We also had Oracle, SQL Server, PostgreSQL, and their cloud varieties. There was so much other DB tech there that the Azure DBs didn’t get the love they need.
 
 As I got to thinking about what I would do, I realized I needed a list of tools I would install. This list would enable me to work on my projects and tasks. **These tools are the same tools I used when I was managing traditional SQL Server and PostgreSQL on VMs, as well.** They work well for cloud or on-premises databases.
 
